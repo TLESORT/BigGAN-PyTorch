@@ -40,6 +40,7 @@ def find_classes(dir):
 def make_dataset(dir, class_to_idx):
   images = []
   dir = os.path.expanduser(dir)
+
   for target in tqdm(sorted(os.listdir(dir))):
     d = os.path.join(dir, target)
     if not os.path.isdir(d):
@@ -53,6 +54,8 @@ def make_dataset(dir, class_to_idx):
           images.append(item)
 
   return images
+
+
 
 
 def pil_loader(path):
@@ -187,6 +190,10 @@ class ILSVRC_HDF5(data.Dataset):
                val_split=0, **kwargs): # last four are dummies
       
     self.root = root
+
+    print("root")
+    print(root)
+
     self.num_imgs = len(h5.File(root, 'r')['labels'])
     
     # self.transform = transform
@@ -360,3 +367,160 @@ class CIFAR100(CIFAR10):
     test_list = [
         ['test', 'f0ef6b0ae62326f3e7ffdfab6717acfc'],
     ]
+
+
+def make_core50_dataset(dir, class_to_idx):
+  images = []
+  dir = os.path.expanduser(dir)
+
+  for sequence in os.listdir(dir):
+    if not os.path.isdir(os.path.join(dir, sequence)):
+      continue
+
+
+    local_dir = os.path.join(dir, sequence)
+    for target in tqdm(sorted(os.listdir(local_dir))):
+      d = os.path.join(local_dir, target)
+      label = int(target.replace("o",""))
+      if not os.path.isdir(d):
+        continue
+
+      for root, _, fnames in sorted(os.walk(d)):
+        for fname in sorted(fnames):
+
+
+
+          if is_image_file(fname):
+            path = os.path.join(root, fname)
+            item = (path, class_to_idx[label])
+            images.append(item)
+
+  return images
+
+def find_classes_core50(dir):
+
+  sequences = [d for d in os.listdir(dir) if os.path.isdir(os.path.join(dir, d))]
+  classes_dir = os.path.join(dir, sequences[0])
+
+  #[print(d.replace("o", "")) for d in os.listdir(classes_dir) if os.path.isdir(os.path.join(classes_dir, d))]
+
+  classes = [int(d.replace("o", "")) for d in os.listdir(classes_dir) if os.path.isdir(os.path.join(classes_dir, d))]
+  classes.sort()
+  class_to_idx = {classes[i]: i for i in range(len(classes))}
+
+  print(classes)
+  return classes, class_to_idx
+
+import pickle as pkl
+class core50(ImageFolder):
+  """A data loader for core50 where the images are arranged in this way: ::
+
+      root/s1/o1/xxx.png
+      root/s1/o2/xxx.png
+      root/s1/o3/xxx.png
+
+      root/s2/o1/xxx.png
+      root/s2/o2/xxx.png
+      root/s2/o3/xxx.png
+
+
+  Args:
+      root (string): Root directory path.
+      transform (callable, optional): A function/transform that  takes in an PIL image
+          and returns a transformed version. E.g, ``transforms.RandomCrop``
+      target_transform (callable, optional): A function/transform that takes in the
+          target and transforms it.
+      loader (callable, optional): A function to load an image given its path.
+
+   Attributes:
+      classes (list): List of the class names.
+      class_to_idx (dict): Dict with items (class_name, class_index).
+      imgs (list): List of (image path, class_index) tuples
+  """
+
+  def __init__(self, root, transform=None, target_transform=None,
+               loader=default_loader, load_in_mem=False,
+               index_filename='paths.pkl', **kwargs):
+
+    classes, class_to_idx = find_classes_core50(root)
+    # Load pre-computed image directory walk
+
+    if index_filename == "I128_core_imgs.npz":
+      index_filename = "paths.pkl"
+
+    print(os.path.join(root, index_filename))
+    if os.path.exists(os.path.join(root, index_filename)):
+      print('Loading pre-saved Index file %s...' % index_filename)
+      #imgs = np.load(index_filename)['imgs']
+      pkl_file = open(os.path.join(root, index_filename), 'rb')
+      imgs = pkl.load(pkl_file)
+    # If first time, walk the folder directory and save the
+    # results to a pre-computed file.
+    else:
+      print('Generating  Index file %s...' % index_filename)
+      imgs = make_core50_dataset(root, class_to_idx)
+      np.savez_compressed(index_filename, **{'imgs': imgs})
+    if len(imgs) == 0:
+      raise (RuntimeError("Found 0 images in subfolders of: " + root + "\n"
+                                                                       "Supported image extensions are: " + ",".join(
+        IMG_EXTENSIONS)))
+
+    self.root = root
+    self.imgs = imgs
+    self.classes = classes
+    self.class_to_idx = class_to_idx
+    self.transform = transform
+    self.target_transform = target_transform
+    self.loader = loader
+    self.load_in_mem = load_in_mem
+
+    if self.load_in_mem:
+      print('Loading all images into memory...')
+      self.data, self.labels = [], []
+      for index in tqdm(range(len(self.imgs))):
+        path, target = imgs[index], int((imgs[index].split('/o')[1]).split('/')[0])
+        print(path)
+        print(target)
+        self.data.append(self.transform(self.loader(path)))
+        self.labels.append(target)
+
+  def __getitem__(self, index):
+    """
+    Args:
+        index (int): Index
+
+    Returns:
+        tuple: (image, target) where target is class_index of the target class.
+    """
+    if self.load_in_mem:
+      img = self.data[index]
+      target = self.labels[index]
+    else:
+      #print("check")
+      #print(self.root)
+      #print(self.imgs[index])
+      #print(int((self.imgs[index].split('/o')[1]).split('/')[0]))
+      #path, target = os.path.join(self.root, self.imgs[index]), int((self.imgs[index].split('/o')[1]).split('/')[0])
+      path, target = self.imgs[index][0], self.imgs[index][1]
+      img = self.loader(str(path))
+      if self.transform is not None:
+        img = self.transform(img)
+
+    if self.target_transform is not None:
+      target = self.target_transform(target)
+
+    # print(img.size(), target)
+    return img, int(target)
+
+  def __len__(self):
+    return len(self.imgs)
+
+  def __repr__(self):
+    fmt_str = 'Dataset ' + self.__class__.__name__ + '\n'
+    fmt_str += '    Number of datapoints: {}\n'.format(self.__len__())
+    fmt_str += '    Root Location: {}\n'.format(self.root)
+    tmp = '    Transforms (if any): '
+    fmt_str += '{0}{1}\n'.format(tmp, self.transform.__repr__().replace('\n', '\n' + ' ' * len(tmp)))
+    tmp = '    Target Transforms (if any): '
+    fmt_str += '{0}{1}'.format(tmp, self.target_transform.__repr__().replace('\n', '\n' + ' ' * len(tmp)))
+    return fmt_str
